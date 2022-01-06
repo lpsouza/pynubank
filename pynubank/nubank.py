@@ -199,11 +199,9 @@ class Nubank:
 
     @requires_auth_mode(AuthMode.APP)
     def get_account_investments_yield(self, date=datetime.datetime.now()) -> float:
-        _, last_day = calendar.monthrange(date.year, date.month)
-        last_month_day = datetime.date(date.year, date.month, last_day)
 
         payload = {
-            "asOf": last_month_day.strftime('%Y-%m-%d')
+            "asOf": date.strftime('%Y-%m-%d')
         }
 
         data = self._make_graphql_request('account_investments_yield', payload)
