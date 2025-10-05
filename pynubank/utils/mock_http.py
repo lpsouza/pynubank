@@ -2,6 +2,8 @@ import fnmatch
 import json
 from pathlib import Path
 
+from requests import Response
+
 from pynubank import NuException
 from pynubank.utils.graphql import prepare_request_body
 from pynubank.utils.http import HttpClient
@@ -30,6 +32,7 @@ class MockHttpClient(HttpClient):
         self._results[('https://*/api/app/discovery', '')] = self._read_data('discovery_app')
         self._results[('https://mocked-proxy-url/api/token', '')] = self._read_data('discovery_login')
         self._results[('https://mocked-proxy-url/api/proxy/login', '')] = self._read_data('discovery_login')
+        self._results[('https://mocked-proxy-url/api/proxy/account_123', '')] = self._read_data('account')
         self._results[('https://mocked-proxy-url/api/proxy/lift', '')] = self._read_data('discovery_login')
         self._results[('https://mocked-proxy-url/api/proxy/events_123', '')] = self._read_data('proxy_events')
         self._results[(GHOSTFLAME_URL, str(prepare_request_body('create_money_request')))] = self._read_data('money')
@@ -43,6 +46,10 @@ class MockHttpClient(HttpClient):
             'pix_money_request')
         self._results[GHOSTFLAME_URL, str(prepare_request_body('pix_receipt_screen'))] = self._read_data(
             'pix_receipt_screen')
+        self._results[GHOSTFLAME_URL, str(prepare_request_body('account_feed_paginated'))] = self._read_data(
+            'account_feed_paginated')
+        self._results[(GHOSTFLAME_URL, str(prepare_request_body('account_savings')))] = self._read_data(
+            'account_savings')
 
     def add_mock_url(self, url: str, graphql_object: str, response_json_name: str):
         self._results[(url, graphql_object)] = self._read_data(response_json_name)
@@ -65,6 +72,16 @@ class MockHttpClient(HttpClient):
             if result is None:
                 raise NuException(f'There is no result expected for {url}')
         return result
+
+    def raw_get(self, url: str) -> Response:
+        res = Response()
+        res.status_code = 200
+        return res
+
+    def raw_post(self, url: str, json: dict) -> Response:
+        res = Response()
+        res.status_code = 200
+        return res
 
     def _find(self, url: str, json: dict = None):
         result = self._results.get((url, ''))

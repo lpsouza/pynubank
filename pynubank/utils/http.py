@@ -10,12 +10,12 @@ class HttpClient:
         self._cert = None
         self._headers = {
             'Content-Type': 'application/json',
-            'X-Correlation-Id': 'WEB-APP.pewW9',
+            'X-Correlation-Id': 'and-7-86-2-1000005524.9twu3pgr',
             'User-Agent': 'pynubank Client - https://github.com/andreroggeri/pynubank',
         }
 
-    def set_cert(self, cert_path: str):
-        self._cert = cert_path
+    def set_cert_data(self, cert_data: bytes):
+        self._cert = cert_data
 
     def set_header(self, name: str, value: str):
         self._headers[name] = value
@@ -28,7 +28,7 @@ class HttpClient:
 
     @property
     def _cert_args(self):
-        return {'pkcs12_filename': self._cert, 'pkcs12_password': ''} if self._cert else {}
+        return {'pkcs12_data': self._cert, 'pkcs12_password': ''} if self._cert else {}
 
     def _handle_response(self, response: Response) -> dict:
         if response.status_code != 200:
@@ -38,6 +38,9 @@ class HttpClient:
 
     def raw_get(self, url: str) -> Response:
         return get(url, headers=self._headers, **self._cert_args)
+
+    def raw_post(self, url: str, json: dict) -> Response:
+        return post(url, json=json, headers=self._headers, **self._cert_args)
 
     def get(self, url: str) -> dict:
         return self._handle_response(self.raw_get(url))
