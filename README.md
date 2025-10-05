@@ -7,6 +7,13 @@
 
 Acesse seus extratos do Nubank pelo Python ([Baseado na versão js](https://github.com/Astrocoders/nubank-api))
 
+## ⚠️ Suporte descontinuado
+
+Desde agosto de 2023 o Nubank passou a bloquear o acesso aos dados sem a verificação facial, o que acabou bloqueando o acesso do `pynubank` as APIs.
+Devido a isso não é mais possível utilizar essa biblioteca. Esse tema foi [longamente discutido na issue 419](https://github.com/andreroggeri/pynubank/issues/419) com algumas soluções alternativas.
+
+Por gentileza, não crie novas issues com erros iguais aos já reportados.
+
 ## Instalação
 Disponível via pip
 

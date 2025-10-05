@@ -1,5 +1,5 @@
-requests==2.26.0
+requests==2.31.0
 qrcode==7.3.1
-pyOpenSSL==21.0.0
-colorama==0.4.3
-requests-pkcs12==1.10
+pyOpenSSL==23.2.0
+colorama==0.4.6
+requests-pkcs12==1.15
