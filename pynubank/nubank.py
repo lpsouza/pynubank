@@ -2,7 +2,9 @@ import calendar
 import datetime
 import itertools
 import uuid
-from typing import Tuple
+from pathlib import Path
+from typing import Tuple, Optional
+from deprecated import deprecated
 
 from qrcode import QRCode
 
@@ -11,7 +13,7 @@ from pynubank.exception import NuMissingCreditCard
 from pynubank.utils.discovery import Discovery
 from pynubank.utils.graphql import prepare_request_body
 from pynubank.utils.http import HttpClient
-from pynubank.utils.parsing import parse_float, parse_pix_transaction
+from pynubank.utils.parsing import parse_float, parse_pix_transaction, parse_generic_transaction
 
 PAYMENT_EVENT_TYPES = (
     'TransferOutEvent',
@@ -42,6 +44,7 @@ class Nubank:
         self._query_url = None
         self._bills_url = None
         self._customer_url = None
+        self._account_url = None
         self._revoke_token_url = None
         self._auth_mode = AuthMode.UNAUTHENTICATED
 
@@ -73,10 +76,12 @@ class Nubank:
         feed_url_keys = ['events', 'magnitude']
         bills_url_keys = ['bills_summary']
         customer_url_keys = ['customer']
+        account_url_keys = ['account']
 
         self._feed_url = self._find_url(feed_url_keys, links)
         self._bills_url = self._find_url(bills_url_keys, links)
         self._customer_url = self._find_url(customer_url_keys, links)
+        self._account_url = self._find_url(account_url_keys, links)
         self._query_url = links['ghostflame']['href']
         self._revoke_token_url = links['revoke_token']['href']
 
@@ -100,8 +105,16 @@ class Nubank:
         self._save_auth_data(response)
         self._auth_mode = AuthMode.WEB
 
-    def authenticate_with_cert(self, cpf: str, password: str, cert_path: str):
-        self._client.set_cert(cert_path)
+    def authenticate_with_cert(self, cpf: str, password: str, cert_path: Optional[str] = None,
+                               cert_data: Optional[bytes] = None):
+        if cert_path is None and cert_data is None:
+            raise ValueError('cert_path or cert_data must be provided')
+
+        if cert_data:
+            self._client.set_cert_data(cert_data)
+        else:
+            self._load_cert(cert_path)
+
         url = self._discovery.get_app_url('token')
         payload = {
             'grant_type': 'password',
@@ -118,8 +131,15 @@ class Nubank:
 
         return response.get('refresh_token')
 
-    def authenticate_with_refresh_token(self, refresh_token: str, cert_path: str):
-        self._client.set_cert(cert_path)
+    def authenticate_with_refresh_token(self, refresh_token: str, cert_path: Optional[str] = None,
+                                        cert_data: Optional[str] = None):
+        if cert_path is None and cert_data is None:
+            raise ValueError('cert_path or cert_data must be provided')
+
+        if cert_data:
+            self._client.set_cert_data(cert_data)
+        else:
+            self._load_cert(cert_path)
 
         url = self._discovery.get_app_url('token')
         payload = {
@@ -140,6 +160,11 @@ class Nubank:
         self._client.post(self._revoke_token_url, {})
 
         self._client.remove_header('Authorization')
+
+    @requires_auth_mode(AuthMode.APP, AuthMode.WEB)
+    def get_credit_card_balance(self):
+        account_details = self._client.get(self._account_url)
+        return account_details['account']['balances']
 
     @requires_auth_mode(AuthMode.APP, AuthMode.WEB)
     def get_card_feed(self):
@@ -177,20 +202,43 @@ class Nubank:
         return self._client.get(statement['_links']['self']['href'])
 
     @requires_auth_mode(AuthMode.APP)
+    @deprecated(version='2.21.0', reason='Use get_account_feed_paginated instead')
     def get_account_feed(self):
         data = self._make_graphql_request('account_feed')
         return data['data']['viewer']['savingsAccount']['feed']
 
     @requires_auth_mode(AuthMode.APP)
+    def get_account_feed_paginated(self, cursor=None):
+        payload = {
+            "cursor": cursor
+        }
+        data = self._make_graphql_request('account_feed_paginated', payload)
+        items = data['data']['viewer']['savingsAccount']['feedItems']
+        data['data']['viewer']['savingsAccount']['feedItems']['edges'] = list(
+            map(parse_generic_transaction, items['edges']))
+        return items
+
+    @requires_auth_mode(AuthMode.APP)
+    @deprecated(version='2.21.0', reason='Use get_account_statements_paginated instead')
     def get_account_statements(self):
         feed = self.get_account_feed()
         feed = map(parse_pix_transaction, feed)
         return list(filter(lambda x: x['__typename'] in PAYMENT_EVENT_TYPES, feed))
 
+    def get_account_statements_paginated(self, cursor=None):
+        feed = self.get_account_feed_paginated(cursor)
+        feed['edges'] = list(filter(lambda x: x['node'].get('amount') is not None, feed['edges']))
+        return feed
+
     @requires_auth_mode(AuthMode.APP)
     def get_account_balance(self):
         data = self._make_graphql_request('account_balance')
         return data['data']['viewer']['savingsAccount']['currentSavingsBalance']['netAmount']
+
+    @requires_auth_mode(AuthMode.APP)
+    def get_account_savings_balance(self):
+        data = self._make_graphql_request('account_savings')
+        return data['data']['viewer']['productFeatures']['buckets']['screens']['home']
 
     @requires_auth_mode(AuthMode.APP)
     def get_account_investments_details(self):
@@ -275,19 +323,81 @@ class Nubank:
 
     @requires_auth_mode(AuthMode.APP)
     def get_pix_identifier(self, transaction_id: str):
-        def find_pix_identifier(table_item: dict):
-            return table_item.get('label') == 'Identificador'
-
         response = self._make_graphql_request('pix_receipt_screen', {'type': 'TRANSFER_IN', 'id': transaction_id})
+
         if 'errors' in response.keys():
             return
 
         screen_pieces = response['data']['viewer']['savingsAccount']['getGenericReceiptScreen']['screenPieces']
-        table_items = list(itertools.chain(*[table_item.get('tableItems', []) for table_item in screen_pieces]))
 
-        identifier_data = next(filter(find_pix_identifier, table_items), None)
+        return self._get_pix_id(screen_pieces)
+
+    def _get_pix_value(self, screen_pieces: dict):
+        def find_pix_value(table_item: dict):
+            return table_item.get('label') == 'Valor'
+
+        table_items = list(itertools.chain(*[table_item.get('tableItems', []) for table_item in screen_pieces]))
+        value_data = next(filter(find_pix_value, table_items), None)
+
+        if value_data is None:
+            return
+
+        return value_data['value']
+
+    def _get_pix_id(self, screen_pieces: dict):
+        def find_pix_id(table_item: dict):
+            return table_item.get('label') == 'Identificador'
+
+        table_items = list(itertools.chain(*[table_item.get('tableItems', []) for table_item in screen_pieces]))
+        identifier_data = next(filter(find_pix_id, table_items), None)
 
         if identifier_data is None:
             return
 
         return identifier_data['value']
+
+    def _get_pix_message(self, screen_pieces: dict):
+        message_content = list(itertools.chain(*[table_item.get('messageContent', []) for table_item in screen_pieces]))
+
+        return ''.join(message_content)
+
+    def _get_pix_date(self, screen_pieces: dict):
+        transaction_date = list(
+            itertools.chain(*[table_item.get('headerSubtitle', []) for table_item in screen_pieces]))
+
+        return ''.join(transaction_date)
+
+    @requires_auth_mode(AuthMode.APP)
+    def get_pix_details(self, transaction_id: str):
+        response = self._make_graphql_request('pix_receipt_screen', {'type': 'TRANSFER_IN', 'id': transaction_id})
+
+        if 'errors' in response.keys():
+            return
+
+        screen_pieces = response['data']['viewer']['savingsAccount']['getGenericReceiptScreen']['screenPieces']
+
+        return {
+            "id": self._get_pix_id(screen_pieces),
+            "value": self._get_pix_value(screen_pieces),
+            "message": self._get_pix_message(screen_pieces),
+            "date": self._get_pix_date(screen_pieces),
+        }
+
+
+    @requires_auth_mode(AuthMode.APP)
+    def get_transaction_details(self, transaction_type: str, transaction_id: str):
+        response = self._make_graphql_request('pix_receipt_screen', {'type': transaction_type, 'id': transaction_id})
+
+        if 'errors' in response.keys():
+            return
+
+        return response['data']['viewer']['savingsAccount']['getGenericReceiptScreen']['screenPieces']
+
+    def _load_cert(self, cert_path: str):
+        cert_file = Path(cert_path)
+        if not cert_file.exists() or not cert_file.is_file():
+            raise FileNotFoundError(f'File not found: {cert_path}')
+
+        with cert_file.open('rb') as c:
+            self._client.set_cert_data(c.read())
+
