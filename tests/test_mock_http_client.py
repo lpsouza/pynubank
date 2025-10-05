@@ -39,6 +39,15 @@ def test_check_not_tested_new_methods(nubank_client):
         'get_card_statement_details': {
             'statement': {'_links': {'self': {'href': f'https://mocked-proxy-url/api/transactions/{uuid4()}'}}},
         },
+        'authenticate_with_cert': {
+            'cpf': '12345678912',
+            'password': 'hunter12',
+            'cert_data': b'cert_data',
+        },
+        'authenticate_with_refresh_token': {
+            'refresh_token': 'refresh_token',
+            'cert_data': b'cert_data',
+        }
     }
 
     methods = dir(nubank_client)
@@ -54,8 +63,11 @@ def test_check_not_tested_new_methods(nubank_client):
 
             for index, name in enumerate(params):
                 args[index] = params[name].annotation() if type(params[name]) == inspect.Parameter else params[name]
-
-            method(*args)
+            try:
+                method(*args)
+            except Exception as ex:
+                print(f'{method_name} is missing a mock !!')
+                raise ex
 
 
 def get_method_arg_count(method):
